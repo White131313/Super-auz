@@ -95,27 +95,26 @@
     $("hint").textContent = on ? "Ascult continuu… apasă ca să opresc." : "Apasă o dată, apoi vorbește. Ascultă singur.";
   }
 
+  function flush(){
+    clearTimeout(flushTimer);
+    const t = pending.trim(); pending = "";
+    if (t) translate(t);
+  }
+
   function launch(){
     if (!listening) return;
     recog = new SR();
     recog.lang = dir === "hu-ro" ? "hu-HU" : "ro-RO";
-    recog.continuous = true;
+    recog.continuous = false;
     recog.interimResults = true;
     recog.onresult = e => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const seg = e.results[i][0].transcript;
-        if (e.results[i].isFinal) pending += seg + " ";
-        else interim += seg;
-      }
-      const show = (pending + interim).trim();
-      if (show) { $("src").textContent = show; $("src").className = "txt"; }
-      // wait for a short pause, then translate the whole sentence at once
+      // Chrome Android repeats cumulative stages: keep ONLY the latest transcript
+      const r = e.results[e.results.length - 1];
+      pending = (r[0].transcript || "").trim();
+      if (pending) { $("src").textContent = pending; $("src").className = "txt"; }
       clearTimeout(flushTimer);
-      flushTimer = setTimeout(() => {
-        const t = pending.trim(); pending = "";
-        if (t) translate(t);
-      }, 1200);
+      if (r.isFinal) flush();
+      else flushTimer = setTimeout(flush, 1100);
     };
     recog.onerror = ev => {
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
@@ -124,7 +123,7 @@
       }
       // no-speech / aborted / network: let onend restart it
     };
-    recog.onend = () => { if (speaking) return; if (listening) setTimeout(launch, 250); else setMic(false); };
+    recog.onend = () => { if (pending) flush(); if (speaking) return; if (listening) setTimeout(launch, 250); else setMic(false); };
     try { recog.start(); } catch(e) { setTimeout(launch, 400); }
   }
 
