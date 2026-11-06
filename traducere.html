@@ -68,6 +68,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   let dir = "hu-ro", recog = null, listening = false, speaking = false, lastTranslation = "";
+  let pending = "", flushTimer = null;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   function setDir(d){
@@ -104,12 +105,17 @@
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const seg = e.results[i][0].transcript;
-        if (e.results[i].isFinal) {
-          const t = seg.trim();
-          if (t) { $("src").textContent = t; $("src").className = "txt"; translate(t); }
-        } else interim += seg;
+        if (e.results[i].isFinal) pending += seg + " ";
+        else interim += seg;
       }
-      if (interim.trim()) { $("src").textContent = interim.trim(); $("src").className = "txt"; }
+      const show = (pending + interim).trim();
+      if (show) { $("src").textContent = show; $("src").className = "txt"; }
+      // wait for a short pause, then translate the whole sentence at once
+      clearTimeout(flushTimer);
+      flushTimer = setTimeout(() => {
+        const t = pending.trim(); pending = "";
+        if (t) translate(t);
+      }, 1200);
     };
     recog.onerror = ev => {
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
