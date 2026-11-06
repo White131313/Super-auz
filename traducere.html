@@ -41,6 +41,16 @@
   .hid{display:none}
   .replay{appearance:none;border:1px solid var(--line);background:transparent;color:var(--accent);
     border-radius:10px;padding:8px 14px;cursor:pointer;font-size:14px;align-self:center}
+  .amp{background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+  .amp .row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:600}
+  .amp .sub{font-size:12.5px;color:var(--muted);font-weight:400}
+  .amp input[type=range]{width:100%;accent-color:var(--accent)}
+  .switch{position:relative;width:52px;height:30px;flex:0 0 auto;display:inline-block}
+  .switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;width:100%;height:100%}
+  .switch span{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.2s;pointer-events:none}
+  .switch span::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}
+  .switch input:checked+span{background:var(--accent)}
+  .switch input:checked+span::after{transform:translateX(22px)}
   footer{text-align:center;color:var(--muted);font-size:12px;margin-top:auto}
 </style>
 </head>
@@ -61,6 +71,11 @@
   <div class="hint" id="hint">Ține sau apasă, apoi vorbește clar.</div>
   <button class="replay hid" id="replay">🔊 Ascultă din nou</button>
 
+  <div class="amp">
+    <div class="row"><label for="amp">Auz amplificat (ce aud în jur)</label><label class="switch"><input type="checkbox" id="amp"><span></span></label></div>
+    <input type="range" id="ampGain" min="1" max="10" step="0.5" value="4">
+    <div class="sub">Se aude vocea originală mai tare în căști; scade singură cât vorbește traducerea. Folosește căști.</div>
+  </div>
   <div class="err hid" id="err"></div>
   <footer>Test de flux. Calitatea e cea a unui serviciu gratuit; în aplicație va fi motorul bun și offline.</footer>
 
@@ -68,7 +83,33 @@
 (() => {
   const $ = id => document.getElementById(id);
   let dir = "hu-ro", recog = null, listening = false, speaking = false, lastTranslation = "";
-  let pending = "", flushTimer = null;
+  let pending = "", flushTimer = null, active = false;
+  let actx = null, astream = null, again = null;
+  async function ampStart(){
+    try{
+      astream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:true}});
+    }catch(e){ showErr("Nu pot porni amplificarea (microfon ocupat sau refuzat)."); $("amp").checked=false; return; }
+    actx = new (window.AudioContext||window.webkitAudioContext)();
+    if (actx.state==="suspended") await actx.resume();
+    const src=actx.createMediaStreamSource(astream);
+    const hp=actx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=300;
+    const lp=actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=3800;
+    const pr=actx.createBiquadFilter(); pr.type="peaking"; pr.frequency.value=2200; pr.Q.value=0.8; pr.gain.value=9;
+    const comp=actx.createDynamicsCompressor(); comp.threshold.value=-20; comp.ratio.value=4;
+    const lim=actx.createDynamicsCompressor(); lim.threshold.value=-6; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=0.001; lim.release.value=0.08;
+    again=actx.createGain(); again.gain.value=parseFloat($("ampGain").value);
+    const m=actx.createChannelMerger(2);
+    src.connect(hp); hp.connect(lp); lp.connect(pr); pr.connect(comp); comp.connect(lim); lim.connect(again);
+    again.connect(m,0,0); again.connect(m,0,1); m.connect(actx.destination);
+  }
+  function ampStop(){
+    try{ astream && astream.getTracks().forEach(t=>t.stop()); }catch(e){}
+    try{ actx && actx.close(); }catch(e){}
+    actx=astream=again=null;
+  }
+  function duck(on){ if(again) again.gain.value = on ? 0.12 : parseFloat($("ampGain").value); }
+  $("amp").addEventListener("change", () => $("amp").checked ? ampStart() : ampStop());
+  $("ampGain").addEventListener("input", () => { if(again && !speaking) again.gain.value=parseFloat($("ampGain").value); });
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   function setDir(d){
@@ -103,6 +144,8 @@
 
   function launch(){
     if (!listening) return;
+    if (active) return;
+    active = true;
     recog = new SR();
     recog.lang = dir === "hu-ro" ? "hu-HU" : "ro-RO";
     recog.continuous = false;
@@ -123,9 +166,11 @@
       }
       // no-speech / aborted / network: let onend restart it
     };
-    recog.onend = () => { if (pending) flush(); if (speaking) return; if (listening) setTimeout(launch, 250); else setMic(false); };
-    try { recog.start(); } catch(e) { setTimeout(launch, 400); }
+    recog.onend = () => { active = false; if (pending) flush(); if (speaking) return; if (listening) setTimeout(launch, 250); else setMic(false); };
+    try { recog.start(); } catch(e) { active = false; setTimeout(launch, 400); }
   }
+
+  setInterval(() => { if (listening && !speaking && !active) launch(); }, 1500);
 
   function begin(){ listening = true; setMic(true); showErr(""); launch(); }
   function end(){ listening = false; try { recog && recog.stop(); } catch(e){} setMic(false); }
@@ -151,8 +196,7 @@
 
   function speak(t){
     if (!window.speechSynthesis || !t) return;
-    // pause listening while we talk, so it doesn't hear itself
-    speaking = true;
+    speaking = true; duck(true);
     try { recog && recog.stop(); } catch(e){}
     speechSynthesis.cancel();
     const want = dir === "hu-ro" ? "ro" : "hu";
@@ -161,7 +205,10 @@
     const v = (speechSynthesis.getVoices()||[]).find(x => x.lang && x.lang.toLowerCase().startsWith(want));
     if (v) u.voice = v;
     u.rate = 0.98;
-    u.onend = u.onerror = () => { speaking = false; if (listening) launch(); };
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(fb); speaking = false; duck(false); if (listening) launch(); };
+    const fb = setTimeout(finish, 2500 + t.length * 110); // safety if onend never fires
+    u.onend = u.onerror = finish;
     speechSynthesis.speak(u);
   }
   $("replay").addEventListener("click", () => speak(lastTranslation));
