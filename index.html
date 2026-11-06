@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Super-Auz</title>
+<style>
+  :root{
+    --bg:#0f1417; --panel:#192126; --fg:#eef4f3; --muted:#8aa0a3;
+    --line:#2a363c; --accent:#38e1b0; --accent2:#1ea8d8; --warn:#ffb020; --bad:#ff5c72;
+    color-scheme:dark;
+    --body:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(120% 80% at 50% 0%,#17242a 0%,var(--bg) 60%);
+    color:var(--fg);font-family:var(--body);line-height:1.45;
+    padding:max(18px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+    display:flex;flex-direction:column;gap:16px;max-width:520px;margin:0 auto;
+  }
+  header{text-align:center;margin-top:4px}
+  h1{font-size:26px;margin:0;letter-spacing:.02em}
+  h1 span{color:var(--accent)}
+  .tag{color:var(--muted);font-size:13px;margin-top:2px}
+  .power{
+    appearance:none;border:0;cursor:pointer;width:100%;padding:20px;border-radius:16px;
+    font:700 19px var(--body);color:#06201a;background:linear-gradient(120deg,var(--accent),var(--accent2));
+    box-shadow:0 8px 28px -10px var(--accent);transition:transform .1s, filter .2s;
+  }
+  .power:active{transform:scale(.99)}
+  .power.off{background:var(--panel);color:var(--fg);box-shadow:none;border:1px solid var(--line)}
+  .power:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .meter{height:12px;border-radius:7px;background:var(--panel);overflow:hidden;border:1px solid var(--line)}
+  .meter>div{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--warn) 80%,var(--bad));transition:width .06s linear}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:14px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .row label{font-weight:600}
+  .row .val{font-family:var(--mono);color:var(--accent);font-size:14px;min-width:54px;text-align:right}
+  input[type=range]{width:100%;accent-color:var(--accent);height:28px}
+  .switch{position:relative;width:52px;height:30px;flex:0 0 auto}
+  .switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+  .switch span{position:absolute;inset:0;background:var(--line);border-radius:999px;transition:.2s;pointer-events:none}
+  .switch span::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}
+  .switch input:checked+span{background:var(--accent)}
+  .switch input:checked+span::after{transform:translateX(22px)}
+  .switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+  .sub{font-size:12.5px;color:var(--muted);margin-top:-6px}
+  .note{font-size:13px;border-radius:12px;padding:12px 14px;display:flex;gap:10px;align-items:flex-start}
+  .note.warn{background:rgba(255,176,32,.12);color:#ffd27a}
+  .note.err{background:rgba(255,92,114,.14);color:#ff9aa8}
+  .hid{display:none}
+  footer{color:var(--muted);font-size:12px;text-align:center}
+  .presets{display:flex;gap:8px}
+  .presets button{flex:1;padding:10px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--fg);font:600 13px var(--body);cursor:pointer}
+  .presets button.on{background:var(--accent);color:#06201a;border-color:var(--accent)}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Super<span>·</span>Auz</h1>
+    <div class="tag">Amplifică ce se aude în jur, în căștile tale</div>
+  </header>
+
+  <div class="note warn" id="earWarn">
+    <span>⚠️</span><span>Pune căști <b>înainte</b> de a porni. Fără căști, microfonul aude difuzorul și fluieră. Căști <b>cu fir</b> = cel mai bun rezultat.</span>
+  </div>
+
+  <button class="power off" id="power" aria-pressed="false">Pornește auzul</button>
+  <div class="meter" aria-hidden="true"><div id="level"></div></div>
+
+  <div class="card">
+    <div class="row">
+      <label for="gain">Volum / amplificare</label>
+      <span class="val" id="gainV">4×</span>
+    </div>
+    <input type="range" id="gain" min="1" max="12" step="0.5" value="4">
+
+    <div class="presets" role="group" aria-label="Moduri">
+      <button data-preset="voce" class="on">Voce</button>
+      <button data-preset="natura">Natură</button>
+      <button data-preset="plin">Tot</button>
+    </div>
+    <div class="sub" id="presetDesc">Voce: scoate vorbirea în față, taie zgomotul gros.</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label for="voice">Accent pe voce</label>
+      <span class="switch"><input type="checkbox" id="voice" checked><span></span></span>
+    </div>
+    <div class="sub">Lasă frecvențele vorbirii, taie huruitul și șuieratul.</div>
+
+    <div class="row">
+      <label for="gate">Taie zgomotul de fond</label>
+      <span class="switch"><input type="checkbox" id="gate"><span></span></span>
+    </div>
+    <div class="sub">Tace când nu e sunet, ca să nu auzi fâsâit continuu.</div>
+
+    <div class="row">
+      <label for="limit">Protecție la sunete bruște</label>
+      <span class="switch"><input type="checkbox" id="limit" checked><span></span></span>
+    </div>
+    <div class="sub">Limitează automat un zgomot puternic, ca să nu-ți țiuie urechea.</div>
+  </div>
+
+  <div class="note err hid" id="err"></div>
+
+  <footer>Rulează pe telefonul tău, nu trimite sunetul nicăieri. Nu e aparat medical. Închide aplicația dacă auzi fluierat și depărtează microfonul de căști.</footer>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let ctx, stream, nodes = null, running = false, raf = 0;
+
+  const presets = {
+    voce:   { desc:"Voce: scoate vorbirea în față, taie zgomotul gros.", hp:300, lp:3800, voice:true },
+    natura: { desc:"Natură: amplifică foșnetul și sunetele fine, taie vântul gros.", hp:150, lp:8000, voice:true },
+    plin:   { desc:"Tot: amplifică tot spectrul, fără filtrare. Mai natural, dar mai mult zgomot.", hp:40, lp:16000, voice:false }
+  };
+  let preset = "voce";
+
+  async function start() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      });
+    } catch (e) {
+      return fail("Nu am acces la microfon. Apasă „Permite” când întreabă, sau verifică setările Safari (aA → Setări website → Microfon).");
+    }
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:"interactive" });
+    if (ctx.state === "suspended") await ctx.resume();
+
+    const src = ctx.createMediaStreamSource(stream);
+    const hp = ctx.createBiquadFilter(); hp.type="highpass";
+    const lp = ctx.createBiquadFilter(); lp.type="lowpass";
+    const presence = ctx.createBiquadFilter(); presence.type="peaking"; presence.frequency.value=2200; presence.Q.value=0.8;
+    const gate = ctx.createDynamicsCompressor(); // used as downward-ish via threshold when enabled
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value=-18; comp.knee.value=18; comp.ratio.value=4; comp.attack.value=0.002; comp.release.value=0.18;
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value=-6; limiter.knee.value=0; limiter.ratio.value=20; limiter.attack.value=0.001; limiter.release.value=0.08;
+    const gain = ctx.createGain();
+    const analyser = ctx.createAnalyser(); analyser.fftSize=512;
+    const buf = new Uint8Array(analyser.fftSize);
+
+    // chain: src -> hp -> lp -> presence -> comp -> limiter -> gain -> analyser -> dest
+    src.connect(hp); hp.connect(lp); lp.connect(presence);
+    presence.connect(comp); comp.connect(limiter); limiter.connect(gain);
+    gain.connect(analyser); analyser.connect(ctx.destination);
+
+    nodes = { src, hp, lp, presence, comp, limiter, gain, analyser, buf };
+    running = true;
+    apply();
+    meter();
+  }
+
+  function apply() {
+    if (!nodes) return;
+    const p = presets[preset];
+    const voiceOn = $("voice").checked;
+    nodes.hp.frequency.value = voiceOn ? p.hp : 40;
+    nodes.lp.frequency.value = voiceOn ? p.lp : 16000;
+    nodes.presence.gain.value = voiceOn ? 6 : 0;
+    // limiter bypass-ish
+    nodes.limiter.ratio.value = $("limit").checked ? 20 : 1;
+    nodes.limiter.threshold.value = $("limit").checked ? -6 : 0;
+    // gate: raise compressor-as-expander feel by pulling threshold; simple approach: extra comp when on
+    nodes.comp.threshold.value = $("gate").checked ? -34 : -18;
+    nodes.comp.ratio.value = $("gate").checked ? 8 : 4;
+    nodes.gain.gain.value = parseFloat($("gain").value);
+  }
+
+  function meter() {
+    if (!running) return;
+    nodes.analyser.getByteTimeDomainData(nodes.buf);
+    let peak = 0;
+    for (let i=0;i<nodes.buf.length;i++){ const v=Math.abs(nodes.buf[i]-128)/128; if(v>peak)peak=v; }
+    $("level").style.width = Math.min(100, peak*140) + "%";
+    raf = requestAnimationFrame(meter);
+  }
+
+  function stop() {
+    running = false; cancelAnimationFrame(raf);
+    $("level").style.width = "0";
+    if (stream) stream.getTracks().forEach(t=>t.stop());
+    if (ctx) ctx.close();
+    ctx = stream = nodes = null;
+  }
+
+  function fail(msg){ const e=$("err"); e.textContent=msg; e.classList.remove("hid"); setPower(false); }
+
+  function setPower(on){
+    const b=$("power");
+    b.classList.toggle("off",!on);
+    b.textContent = on ? "Oprește" : "Pornește auzul";
+    b.setAttribute("aria-pressed", String(on));
+  }
+
+  $("power").addEventListener("click", async () => {
+    $("err").classList.add("hid");
+    if (running) { stop(); setPower(false); }
+    else { setPower(true); await start(); if(!running) {} }
+  });
+
+  ["gain","voice","gate","limit"].forEach(id => $(id).addEventListener("input", apply));
+  $("gain").addEventListener("input", () => $("gainV").textContent = parseFloat($("gain").value).toString().replace(".",",")+"×");
+
+  document.querySelectorAll(".presets button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".presets button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); preset=b.dataset.preset;
+    $("presetDesc").textContent = presets[preset].desc;
+    apply();
+  }));
+})();
+</script>
+</body>
+</html>
