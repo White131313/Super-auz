@@ -146,9 +146,13 @@
     const buf = new Uint8Array(analyser.fftSize);
 
     // chain: src -> hp -> lp -> presence -> comp -> limiter -> gain -> analyser -> dest
+    const merger = ctx.createChannelMerger(2);
     src.connect(hp); hp.connect(lp); lp.connect(presence);
     presence.connect(comp); comp.connect(limiter); limiter.connect(gain);
-    gain.connect(analyser); analyser.connect(ctx.destination);
+    gain.connect(analyser);
+    analyser.connect(merger, 0, 0);
+    analyser.connect(merger, 0, 1);
+    merger.connect(ctx.destination);
 
     nodes = { src, hp, lp, presence, comp, limiter, gain, analyser, buf };
     running = true;
