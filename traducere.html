@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Traducere vocală</title>
+<style>
+  :root{
+    --bg:#0f1316; --panel:#19212557; --panel2:#1a2328; --fg:#eef4f3; --muted:#8aa0a3;
+    --line:#2a363c; --hu:#ff6b7f; --ro:#5cc182; --accent:#38e1b0; color-scheme:dark;
+    --body:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{background:radial-gradient(130% 70% at 50% 0%,#17242a,#0f1316 60%);color:var(--fg);
+    font-family:var(--body);line-height:1.45;
+    padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+    max-width:540px;margin:0 auto;display:flex;flex-direction:column;gap:14px;min-height:100vh}
+  h1{font-size:23px;margin:6px 0 0;text-align:center}
+  .dir{display:flex;gap:8px;justify-content:center;align-items:center;margin:4px 0}
+  .dir .side{font-weight:700;font-size:15px}
+  .dir .hu{color:var(--hu)}.dir .ro{color:var(--ro)}
+  .dir button{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--fg);
+    border-radius:999px;width:40px;height:40px;cursor:pointer;font-size:18px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:16px;min-height:84px}
+  .card .lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+  .card .txt{font-size:19px;font-weight:500;min-height:26px}
+  .card.src .txt{color:var(--fg)}
+  .card.dst{border-color:var(--ro)}
+  .card.dst .txt{color:var(--ro)}
+  .empty{color:var(--muted);font-weight:400;font-size:15px}
+  .mic{appearance:none;border:0;cursor:pointer;width:96px;height:96px;border-radius:50%;align-self:center;
+    background:linear-gradient(140deg,var(--accent),#1ea8d8);color:#06201a;box-shadow:0 10px 30px -10px var(--accent);
+    display:flex;align-items:center;justify-content:center;transition:transform .1s}
+  .mic:active{transform:scale(.96)}
+  .mic.rec{background:linear-gradient(140deg,#ff5c72,#ff2d55);box-shadow:0 0 0 0 rgba(255,45,85,.5);animation:pulse 1.2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,45,85,.5)}70%{box-shadow:0 0 0 22px rgba(255,45,85,0)}100%{box-shadow:0 0 0 0 rgba(255,45,85,0)}}
+  .mic svg{width:40px;height:40px}
+  .hint{text-align:center;color:var(--muted);font-size:14px;min-height:20px}
+  .err{background:rgba(255,92,114,.14);color:#ff9aa8;border-radius:12px;padding:12px 14px;font-size:14px}
+  .hid{display:none}
+  .replay{appearance:none;border:1px solid var(--line);background:transparent;color:var(--accent);
+    border-radius:10px;padding:8px 14px;cursor:pointer;font-size:14px;align-self:center}
+  footer{text-align:center;color:var(--muted);font-size:12px;margin-top:auto}
+</style>
+</head>
+<body>
+  <h1>Traducere vocală</h1>
+  <div class="dir">
+    <span class="side hu" id="sideA">Maghiară</span>
+    <button id="swap" aria-label="Schimbă direcția">⇄</button>
+    <span class="side ro" id="sideB">Română</span>
+  </div>
+
+  <div class="card src"><p class="lbl">Ai spus</p><div class="txt empty" id="src">Apasă pe microfon și vorbește.</div></div>
+  <div class="card dst"><p class="lbl">Traducere</p><div class="txt empty" id="dst">…</div></div>
+
+  <button class="mic" id="mic" aria-label="Vorbește">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21a1 1 0 0 0 2 0v-3.08A7 7 0 0 0 19 11z"/></svg>
+  </button>
+  <div class="hint" id="hint">Ține sau apasă, apoi vorbește clar.</div>
+  <button class="replay hid" id="replay">🔊 Ascultă din nou</button>
+
+  <div class="err hid" id="err"></div>
+  <footer>Test de flux. Calitatea e cea a unui serviciu gratuit; în aplicație va fi motorul bun și offline.</footer>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let dir = "hu-ro", recog = null, recording = false, lastTranslation = "";
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  function setDir(d){
+    dir = d; const hu = d === "hu-ro";
+    $("sideA").textContent = hu ? "Maghiară" : "Română";
+    $("sideA").className = "side " + (hu ? "hu" : "ro");
+    $("sideB").textContent = hu ? "Română" : "Maghiară";
+    $("sideB").className = "side " + (hu ? "ro" : "hu");
+    $("src").textContent = "Apasă pe microfon și vorbește."; $("src").className = "txt empty";
+    $("dst").textContent = "…"; $("dst").className = "txt empty";
+    $("replay").classList.add("hid");
+  }
+  $("swap").addEventListener("click", () => setDir(dir === "hu-ro" ? "ro-hu" : "hu-ro"));
+
+  function showErr(m){ const e=$("err"); e.textContent=m; e.classList.toggle("hid",!m); }
+
+  if (!SR) {
+    $("mic").disabled = true; $("mic").style.opacity = .5;
+    showErr("Browserul ăsta nu are „voce → text”. Pe iPhone/Safari nu merge; deschide pagina pe Android (Chrome).");
+  }
+
+  function startRec(){
+    if (!SR || recording) return;
+    showErr("");
+    recog = new SR();
+    recog.lang = dir === "hu-ro" ? "hu-HU" : "ro-RO";
+    recog.interimResults = true;
+    recog.maxAlternatives = 1;
+    let finalText = "";
+    recog.onresult = e => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      const shown = (finalText + interim).trim();
+      if (shown) { $("src").textContent = shown; $("src").className = "txt"; }
+    };
+    recog.onerror = ev => {
+      recording = false; setMic(false);
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed")
+        showErr("Nu am acces la microfon. Permite-l în browser și încearcă iar.");
+      else if (ev.error === "no-speech") showErr("N-am auzit nimic. Apasă și vorbește mai aproape.");
+      else showErr("Eroare la ascultare. Mai încearcă o dată.");
+    };
+    recog.onend = () => {
+      recording = false; setMic(false);
+      const t = $("src").textContent.trim();
+      if (t && !$("src").classList.contains("empty")) translate(t);
+    };
+    try { recog.start(); recording = true; setMic(true); }
+    catch(e){ recording = false; setMic(false); }
+  }
+  function stopRec(){ if (recog && recording) { try { recog.stop(); } catch(e){} } }
+
+  function setMic(on){
+    recording = on;
+    $("mic").classList.toggle("rec", on);
+    $("hint").textContent = on ? "Ascult… apasă din nou când termini." : "Ține sau apasă, apoi vorbește clar.";
+  }
+
+  $("mic").addEventListener("click", () => recording ? stopRec() : startRec());
+
+  async function translate(text){
+    $("dst").textContent = "Traduc…"; $("dst").className = "txt empty";
+    const pair = dir === "hu-ro" ? "hu|ro" : "ro|hu";
+    try {
+      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${pair}`);
+      const j = await r.json();
+      const out = j && j.responseData && j.responseData.translatedText;
+      if (!out) throw new Error("no translation");
+      lastTranslation = out;
+      $("dst").textContent = out; $("dst").className = "txt";
+      $("replay").classList.remove("hid");
+      speak(out);
+    } catch(e) {
+      $("dst").textContent = "…"; $("dst").className = "txt empty";
+      showErr("N-am putut traduce acum (fără internet sau limită atinsă). Mai încearcă.");
+    }
+  }
+
+  function speak(t){
+    if (!window.speechSynthesis || !t) return;
+    speechSynthesis.cancel();
+    const want = dir === "hu-ro" ? "ro" : "hu";
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = want === "ro" ? "ro-RO" : "hu-HU";
+    const v = (speechSynthesis.getVoices()||[]).find(x => x.lang && x.lang.toLowerCase().startsWith(want));
+    if (v) u.voice = v;
+    u.rate = 0.98;
+    speechSynthesis.speak(u);
+  }
+  $("replay").addEventListener("click", () => speak(lastTranslation));
+
+  setDir("hu-ro");
+})();
+</script>
+</body>
+</html>
