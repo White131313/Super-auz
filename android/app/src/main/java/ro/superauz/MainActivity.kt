@@ -78,6 +78,24 @@ class MainActivity : Activity() {
     private val feedQueue = LinkedBlockingQueue<ByteArray>(64)
     private var feedThread: Thread? = null
     private lateinit var statusView: TextView
+    private lateinit var levelView: TextView
+    private var sessionToken = 0
+    private var maxRms = -10f
+
+    private fun errName(e: Int): String = when (e) {
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "rețea lentă"
+        SpeechRecognizer.ERROR_NETWORK -> "fără rețea"
+        SpeechRecognizer.ERROR_AUDIO -> "problemă microfon"
+        SpeechRecognizer.ERROR_SERVER -> "eroare server Google"
+        SpeechRecognizer.ERROR_CLIENT -> "eroare client"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "n-am auzit nimic"
+        SpeechRecognizer.ERROR_NO_MATCH -> "n-am înțeles"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "ocupat"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "fără permisiune"
+        12 -> "limba nu e suportată"
+        13 -> "limba nu e descărcată"
+        else -> "eroare"
+    }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -133,6 +151,8 @@ class MainActivity : Activity() {
         statusView = label("", 13f, "#38e1b0")
         statusView.setPadding(0, dp(4), 0, dp(4))
         root.addView(statusView)
+        levelView = label("", 12f, "#8aa0a3")
+        root.addView(levelView)
 
         replayBtn = Button(this)
         replayBtn.isAllCaps = false
@@ -286,16 +306,31 @@ class MainActivity : Activity() {
             return
         }
         try { recognizer?.destroy() } catch (e: Exception) {}
+        maxRms = -10f
         val r = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 statusView.text = if (feed != null) "● Ascult (microfon comun cu amplificarea)…" else "● Ascult…"
             }
-            override fun onBeginningOfSpeech() { statusView.text = "● Aud vorbire…" }
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBeginningOfSpeech() {
+                statusView.text = "● Aud vorbire…"
+                val token = ++sessionToken
+                ui.postDelayed({
+                    if (sessionToken == token && listening && !busy) {
+                        statusView.text = "Google nu a dat niciun text în 10 s (sunet max " + maxRms.toInt() + "). Repornesc."
+                        try { recognizer?.cancel() } catch (e: Exception) {}
+                        restartSoon(300)
+                    }
+                }, 10000L)
+            }
+            override fun onRmsChanged(rmsdB: Float) {
+                maxRms = maxOf(maxRms, rmsdB)
+                val bars = ((rmsdB + 2f) / 1.2f).toInt().coerceIn(0, 10)
+                levelView.text = "Nivel sunet: " + "▮".repeat(bars) + "▯".repeat(10 - bars)
+            }
             override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
+            override fun onEndOfSpeech() { statusView.text = "● Procesez…" }
             override fun onEvent(eventType: Int, params: Bundle?) {}
 
             override fun onPartialResults(partialResults: Bundle?) {
@@ -304,6 +339,7 @@ class MainActivity : Activity() {
             }
 
             override fun onResults(results: Bundle?) {
+                sessionToken++
                 val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                 if (!t.isNullOrBlank()) {
                     srcView.text = t
@@ -314,16 +350,14 @@ class MainActivity : Activity() {
             }
 
             override fun onError(error: Int) {
+                sessionToken++
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                     listening = false
                     refreshLabels()
                     msg("Nu am permisiune la microfon.")
                     return
                 }
-                if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT &&
-                    error != SpeechRecognizer.ERROR_CLIENT) {
-                    statusView.text = "Recunoaștere: eroare " + error + " (repornesc)"
-                }
+                statusView.text = "Recunoaștere: " + errName(error) + " (cod " + error + "), repornesc"
                 if (!listening || busy) return
                 restartSoon(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 900L else 300L)
             }
@@ -332,7 +366,10 @@ class MainActivity : Activity() {
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (huToRo) "hu-HU" else "ro-RO")
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+        val lang = if (huToRo) "hu-HU" else "ro-RO"
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+        i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, lang)
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         closeFeed()
         if (ampOn) {
