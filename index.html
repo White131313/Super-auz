@@ -94,7 +94,7 @@
 
     <div class="row">
       <label for="gate">Taie zgomotul de fond</label>
-      <label class="switch"><input type="checkbox" id="gate" checked><span></span></label>
+      <label class="switch"><input type="checkbox" id="gate"><span></span></label>
     </div>
     <div class="sub">Tace când nu e sunet, ca să nu auzi fâsâit continuu.</div>
 
@@ -187,9 +187,9 @@
     // adaptive noise floor: drops fast toward quiet, creeps up slowly
     noiseFloor += (rms - noiseFloor) * (rms < noiseFloor ? 0.1 : 0.0008);
     if ($("gate").checked) {
-      const open = rms > noiseFloor * 1.7 + 0.004;
-      const target = open ? 1 : 0.2;
-      gateLevel += (target - gateLevel) * (open ? 0.6 : 0.04);
+      const open = rms > noiseFloor * 1.35 + 0.0025;
+      const target = open ? 1 : 0.4;
+      gateLevel += (target - gateLevel) * (open ? 0.7 : 0.03);
     } else {
       gateLevel += (1 - gateLevel) * 0.6;
     }
