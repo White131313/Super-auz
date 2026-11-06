@@ -90,14 +90,22 @@ class MainActivity : Activity() {
         val found = packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
             .map { ComponentName(it.serviceInfo.packageName, it.serviceInfo.name) }
         // Google app (online) first, then anything else
-        services = found.sortedBy { if (it.packageName == "com.google.android.googlequicksearchbox") 0 else 1 }
+        services = found.sortedBy {
+            when (it.packageName) {
+                "com.google.android.googlequicksearchbox" -> 0
+                "com.google.android.tts" -> 1
+                "com.google.android.as" -> 9
+                else -> 5
+            }
+        }
         serviceIdx = 0
     }
 
     private fun serviceName(c: ComponentName?): String = when {
         c == null -> "implicit"
         c.packageName == "com.google.android.googlequicksearchbox" -> "Google (online)"
-        c.packageName == "com.google.android.tts" -> "Speech Services (offline)"
+        c.packageName == "com.google.android.tts" -> "Speech Services Google"
+        c.packageName == "com.google.android.as" -> "Android System Intelligence (doar offline)"
         else -> c.packageName
     }
     private var maxRms = -10f
@@ -183,7 +191,7 @@ class MainActivity : Activity() {
                 try { recognizer?.cancel() } catch (e: Exception) {}
                 restartSoon(300)
             } else {
-                serviceView.text = "Serviciu: " + serviceName(services.getOrNull(serviceIdx)) + " — pornește ascultarea"
+                serviceView.text = "Serviciu: " + serviceName(services.getOrNull(serviceIdx)) + "  (" + (serviceIdx + 1) + "/" + services.size + ") — apasă iar ca să schimbi"
             }
         }
         root.addView(serviceView)
@@ -248,6 +256,8 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         refreshLabels()
+        loadServices()
+        serviceView.text = "Serviciu: " + serviceName(services.getOrNull(0)) + "  (1/" + maxOf(services.size, 1) + ") — apasă aici ca să schimbi"
 
         tts = TextToSpeech(this) { status -> ttsReady = (status == TextToSpeech.SUCCESS) }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
