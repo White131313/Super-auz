@@ -2,6 +2,7 @@ package ro.superauz
 
 import android.Manifest
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -17,6 +18,7 @@ import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
@@ -79,7 +81,25 @@ class MainActivity : Activity() {
     private var feedThread: Thread? = null
     private lateinit var statusView: TextView
     private lateinit var levelView: TextView
+    private lateinit var serviceView: TextView
     private var sessionToken = 0
+    private var services: List<ComponentName> = emptyList()
+    private var serviceIdx = 0
+
+    private fun loadServices() {
+        val found = packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+            .map { ComponentName(it.serviceInfo.packageName, it.serviceInfo.name) }
+        // Google app (online) first, then anything else
+        services = found.sortedBy { if (it.packageName == "com.google.android.googlequicksearchbox") 0 else 1 }
+        serviceIdx = 0
+    }
+
+    private fun serviceName(c: ComponentName?): String = when {
+        c == null -> "implicit"
+        c.packageName == "com.google.android.googlequicksearchbox" -> "Google (online)"
+        c.packageName == "com.google.android.tts" -> "Speech Services (offline)"
+        else -> c.packageName
+    }
     private var maxRms = -10f
 
     private fun errName(e: Int): String = when (e) {
@@ -153,6 +173,20 @@ class MainActivity : Activity() {
         root.addView(statusView)
         levelView = label("", 12f, "#8aa0a3")
         root.addView(levelView)
+        serviceView = label("", 12f, "#8aa0a3")
+        serviceView.setPadding(0, dp(4), 0, dp(8))
+        serviceView.setOnClickListener {
+            if (services.isEmpty()) loadServices()
+            if (services.size > 1) serviceIdx = (serviceIdx + 1) % services.size
+            if (listening) {
+                busy = false
+                try { recognizer?.cancel() } catch (e: Exception) {}
+                restartSoon(300)
+            } else {
+                serviceView.text = "Serviciu: " + serviceName(services.getOrNull(serviceIdx)) + " — pornește ascultarea"
+            }
+        }
+        root.addView(serviceView)
 
         replayBtn = Button(this)
         replayBtn.isAllCaps = false
@@ -307,7 +341,10 @@ class MainActivity : Activity() {
         }
         try { recognizer?.destroy() } catch (e: Exception) {}
         maxRms = -10f
-        val r = SpeechRecognizer.createSpeechRecognizer(this)
+        if (services.isEmpty()) loadServices()
+        val comp = services.getOrNull(serviceIdx)
+        val r = if (comp != null) SpeechRecognizer.createSpeechRecognizer(this, comp) else SpeechRecognizer.createSpeechRecognizer(this)
+        serviceView.text = "Serviciu: " + serviceName(comp) + "  (" + (serviceIdx + 1) + "/" + maxOf(services.size, 1) + ")  — apasă aici ca să schimbi"
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
@@ -327,7 +364,7 @@ class MainActivity : Activity() {
             override fun onRmsChanged(rmsdB: Float) {
                 maxRms = maxOf(maxRms, rmsdB)
                 val bars = ((rmsdB + 2f) / 1.2f).toInt().coerceIn(0, 10)
-                levelView.text = "Nivel sunet: " + "▮".repeat(bars) + "▯".repeat(10 - bars)
+                levelView.text = "Nivel sunet: " + "|".repeat(bars) + "·".repeat(10 - bars)
             }
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() { statusView.text = "● Procesez…" }
