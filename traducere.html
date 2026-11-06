@@ -71,11 +71,6 @@
   <div class="hint" id="hint">Ține sau apasă, apoi vorbește clar.</div>
   <button class="replay hid" id="replay">🔊 Ascultă din nou</button>
 
-  <div class="amp">
-    <div class="row"><label for="amp">Auz amplificat (ce aud în jur)</label><label class="switch"><input type="checkbox" id="amp"><span></span></label></div>
-    <input type="range" id="ampGain" min="1" max="10" step="0.5" value="4">
-    <div class="sub">Se aude vocea originală mai tare în căști; scade singură cât vorbește traducerea. Folosește căști.</div>
-  </div>
   <div class="err hid" id="err"></div>
   <footer>Test de flux. Calitatea e cea a unui serviciu gratuit; în aplicație va fi motorul bun și offline.</footer>
 
@@ -84,32 +79,7 @@
   const $ = id => document.getElementById(id);
   let dir = "hu-ro", recog = null, listening = false, speaking = false, lastTranslation = "";
   let pending = "", flushTimer = null, active = false;
-  let actx = null, astream = null, again = null;
-  async function ampStart(){
-    try{
-      astream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:true}});
-    }catch(e){ showErr("Nu pot porni amplificarea (microfon ocupat sau refuzat)."); $("amp").checked=false; return; }
-    actx = new (window.AudioContext||window.webkitAudioContext)();
-    if (actx.state==="suspended") await actx.resume();
-    const src=actx.createMediaStreamSource(astream);
-    const hp=actx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=300;
-    const lp=actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=3800;
-    const pr=actx.createBiquadFilter(); pr.type="peaking"; pr.frequency.value=2200; pr.Q.value=0.8; pr.gain.value=9;
-    const comp=actx.createDynamicsCompressor(); comp.threshold.value=-20; comp.ratio.value=4;
-    const lim=actx.createDynamicsCompressor(); lim.threshold.value=-6; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=0.001; lim.release.value=0.08;
-    again=actx.createGain(); again.gain.value=parseFloat($("ampGain").value);
-    const m=actx.createChannelMerger(2);
-    src.connect(hp); hp.connect(lp); lp.connect(pr); pr.connect(comp); comp.connect(lim); lim.connect(again);
-    again.connect(m,0,0); again.connect(m,0,1); m.connect(actx.destination);
-  }
-  function ampStop(){
-    try{ astream && astream.getTracks().forEach(t=>t.stop()); }catch(e){}
-    try{ actx && actx.close(); }catch(e){}
-    actx=astream=again=null;
-  }
-  function duck(on){ if(again) again.gain.value = on ? 0.12 : parseFloat($("ampGain").value); }
-  $("amp").addEventListener("change", () => $("amp").checked ? ampStart() : ampStop());
-  $("ampGain").addEventListener("input", () => { if(again && !speaking) again.gain.value=parseFloat($("ampGain").value); });
+
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   function setDir(d){
@@ -196,7 +166,7 @@
 
   function speak(t){
     if (!window.speechSynthesis || !t) return;
-    speaking = true; duck(true);
+    speaking = true;
     try { recog && recog.stop(); } catch(e){}
     speechSynthesis.cancel();
     const want = dir === "hu-ro" ? "ro" : "hu";
@@ -206,7 +176,7 @@
     if (v) u.voice = v;
     u.rate = 0.98;
     let done = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(fb); speaking = false; duck(false); if (listening) launch(); };
+    const finish = () => { if (done) return; done = true; clearTimeout(fb); speaking = false; if (listening) launch(); };
     const fb = setTimeout(finish, 2500 + t.length * 110); // safety if onend never fires
     u.onend = u.onerror = finish;
     speechSynthesis.speak(u);
