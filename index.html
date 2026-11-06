@@ -124,7 +124,7 @@
   async function start() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation:false, noiseSuppression:true, autoGainControl:true }
+        audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:true }
       });
     } catch (e) {
       return fail("Nu am acces la microfon. Apasă „Permite” când întreabă, sau verifică setările Safari (aA → Setări website → Microfon).");
@@ -176,7 +176,7 @@
     nodes.gain.gain.value = parseFloat($("gain").value);
   }
 
-  let gateLevel = 1;
+  let gateLevel = 1, noiseFloor = 0.01;
   function meter() {
     if (!running) return;
     nodes.analyser.getByteTimeDomainData(nodes.buf);
@@ -184,10 +184,12 @@
     for (let i=0;i<nodes.buf.length;i++){ const v=(nodes.buf[i]-128)/128; sum+=v*v; const a=Math.abs(v); if(a>peak)peak=a; }
     const rms = Math.sqrt(sum/nodes.buf.length);
     $("level").style.width = Math.min(100, peak*160) + "%";
+    // adaptive noise floor: drops fast toward quiet, creeps up slowly
+    noiseFloor += (rms - noiseFloor) * (rms < noiseFloor ? 0.1 : 0.0008);
     if ($("gate").checked) {
-      const open = rms > 0.014;
-      const target = open ? 1 : 0.03;
-      gateLevel += (target - gateLevel) * (open ? 0.6 : 0.06);
+      const open = rms > noiseFloor * 1.7 + 0.004;
+      const target = open ? 1 : 0.2;
+      gateLevel += (target - gateLevel) * (open ? 0.6 : 0.04);
     } else {
       gateLevel += (1 - gateLevel) * 0.6;
     }
