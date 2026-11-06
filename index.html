@@ -147,14 +147,16 @@
 
     // chain: src -> hp -> lp -> presence -> comp -> limiter -> gain -> analyser -> dest
     const merger = ctx.createChannelMerger(2);
+    const gateGain = ctx.createGain(); gateGain.gain.value = 1;
     src.connect(hp); hp.connect(lp); lp.connect(presence);
     presence.connect(comp); comp.connect(limiter); limiter.connect(gain);
-    gain.connect(analyser);
-    analyser.connect(merger, 0, 0);
-    analyser.connect(merger, 0, 1);
+    gain.connect(gateGain);
+    gateGain.connect(merger, 0, 0);
+    gateGain.connect(merger, 0, 1);
     merger.connect(ctx.destination);
+    presence.connect(analyser); // measurement tap, before amplification
 
-    nodes = { src, hp, lp, presence, comp, limiter, gain, analyser, buf };
+    nodes = { src, hp, lp, presence, comp, limiter, gain, gateGain, analyser, buf };
     running = true;
     apply();
     meter();
@@ -166,22 +168,30 @@
     const voiceOn = $("voice").checked;
     nodes.hp.frequency.value = voiceOn ? p.hp : 40;
     nodes.lp.frequency.value = voiceOn ? p.lp : 16000;
-    nodes.presence.gain.value = voiceOn ? 6 : 0;
-    // limiter bypass-ish
+    nodes.presence.gain.value = voiceOn ? 9 : 0;
     nodes.limiter.ratio.value = $("limit").checked ? 20 : 1;
     nodes.limiter.threshold.value = $("limit").checked ? -6 : 0;
-    // gate: raise compressor-as-expander feel by pulling threshold; simple approach: extra comp when on
-    nodes.comp.threshold.value = $("gate").checked ? -34 : -18;
-    nodes.comp.ratio.value = $("gate").checked ? 8 : 4;
+    nodes.comp.threshold.value = -20;
+    nodes.comp.ratio.value = 4;
     nodes.gain.gain.value = parseFloat($("gain").value);
   }
 
+  let gateLevel = 1;
   function meter() {
     if (!running) return;
     nodes.analyser.getByteTimeDomainData(nodes.buf);
-    let peak = 0;
-    for (let i=0;i<nodes.buf.length;i++){ const v=Math.abs(nodes.buf[i]-128)/128; if(v>peak)peak=v; }
-    $("level").style.width = Math.min(100, peak*140) + "%";
+    let sum = 0, peak = 0;
+    for (let i=0;i<nodes.buf.length;i++){ const v=(nodes.buf[i]-128)/128; sum+=v*v; const a=Math.abs(v); if(a>peak)peak=a; }
+    const rms = Math.sqrt(sum/nodes.buf.length);
+    $("level").style.width = Math.min(100, peak*160) + "%";
+    if ($("gate").checked) {
+      const open = rms > 0.014;
+      const target = open ? 1 : 0.03;
+      gateLevel += (target - gateLevel) * (open ? 0.6 : 0.06);
+    } else {
+      gateLevel += (1 - gateLevel) * 0.6;
+    }
+    if (nodes.gateGain) nodes.gateGain.gain.value = gateLevel;
     raf = requestAnimationFrame(meter);
   }
 
