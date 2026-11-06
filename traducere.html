@@ -67,7 +67,7 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  let dir = "hu-ro", recog = null, recording = false, lastTranslation = "";
+  let dir = "hu-ro", recog = null, listening = false, speaking = false, lastTranslation = "";
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   function setDir(d){
@@ -76,11 +76,11 @@
     $("sideA").className = "side " + (hu ? "hu" : "ro");
     $("sideB").textContent = hu ? "Română" : "Maghiară";
     $("sideB").className = "side " + (hu ? "ro" : "hu");
-    $("src").textContent = "Apasă pe microfon și vorbește."; $("src").className = "txt empty";
+    $("src").textContent = "Apasă o dată, apoi vorbește."; $("src").className = "txt empty";
     $("dst").textContent = "…"; $("dst").className = "txt empty";
     $("replay").classList.add("hid");
   }
-  $("swap").addEventListener("click", () => setDir(dir === "hu-ro" ? "ro-hu" : "hu-ro"));
+  $("swap").addEventListener("click", () => { const on = listening; if(on) end(); setDir(dir === "hu-ro" ? "ro-hu" : "hu-ro"); if(on) begin(); });
 
   function showErr(m){ const e=$("err"); e.textContent=m; e.classList.toggle("hid",!m); }
 
@@ -89,47 +89,42 @@
     showErr("Browserul ăsta nu are „voce → text”. Pe iPhone/Safari nu merge; deschide pagina pe Android (Chrome).");
   }
 
-  function startRec(){
-    if (!SR || recording) return;
-    showErr("");
+  function setMic(on){
+    $("mic").classList.toggle("rec", on);
+    $("hint").textContent = on ? "Ascult continuu… apasă ca să opresc." : "Apasă o dată, apoi vorbește. Ascultă singur.";
+  }
+
+  function launch(){
+    if (!listening) return;
     recog = new SR();
     recog.lang = dir === "hu-ro" ? "hu-HU" : "ro-RO";
+    recog.continuous = true;
     recog.interimResults = true;
-    recog.maxAlternatives = 1;
-    let finalText = "";
     recog.onresult = e => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += t; else interim += t;
+        const seg = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          const t = seg.trim();
+          if (t) { $("src").textContent = t; $("src").className = "txt"; translate(t); }
+        } else interim += seg;
       }
-      const shown = (finalText + interim).trim();
-      if (shown) { $("src").textContent = shown; $("src").className = "txt"; }
+      if (interim.trim()) { $("src").textContent = interim.trim(); $("src").className = "txt"; }
     };
     recog.onerror = ev => {
-      recording = false; setMic(false);
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed")
-        showErr("Nu am acces la microfon. Permite-l în browser și încearcă iar.");
-      else if (ev.error === "no-speech") showErr("N-am auzit nimic. Apasă și vorbește mai aproape.");
-      else showErr("Eroare la ascultare. Mai încearcă o dată.");
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        listening = false; setMic(false);
+        showErr("Nu am acces la microfon. Permite-l în Chrome și apasă iar.");
+      }
+      // no-speech / aborted / network: let onend restart it
     };
-    recog.onend = () => {
-      recording = false; setMic(false);
-      const t = $("src").textContent.trim();
-      if (t && !$("src").classList.contains("empty")) translate(t);
-    };
-    try { recog.start(); recording = true; setMic(true); }
-    catch(e){ recording = false; setMic(false); }
-  }
-  function stopRec(){ if (recog && recording) { try { recog.stop(); } catch(e){} } }
-
-  function setMic(on){
-    recording = on;
-    $("mic").classList.toggle("rec", on);
-    $("hint").textContent = on ? "Ascult… apasă din nou când termini." : "Ține sau apasă, apoi vorbește clar.";
+    recog.onend = () => { if (speaking) return; if (listening) setTimeout(launch, 250); else setMic(false); };
+    try { recog.start(); } catch(e) { setTimeout(launch, 400); }
   }
 
-  $("mic").addEventListener("click", () => recording ? stopRec() : startRec());
+  function begin(){ listening = true; setMic(true); showErr(""); launch(); }
+  function end(){ listening = false; try { recog && recog.stop(); } catch(e){} setMic(false); }
+  $("mic").addEventListener("click", () => listening ? end() : begin());
 
   async function translate(text){
     $("dst").textContent = "Traduc…"; $("dst").className = "txt empty";
@@ -151,6 +146,9 @@
 
   function speak(t){
     if (!window.speechSynthesis || !t) return;
+    // pause listening while we talk, so it doesn't hear itself
+    speaking = true;
+    try { recog && recog.stop(); } catch(e){}
     speechSynthesis.cancel();
     const want = dir === "hu-ro" ? "ro" : "hu";
     const u = new SpeechSynthesisUtterance(t);
@@ -158,6 +156,7 @@
     const v = (speechSynthesis.getVoices()||[]).find(x => x.lang && x.lang.toLowerCase().startsWith(want));
     if (v) u.voice = v;
     u.rate = 0.98;
+    u.onend = u.onerror = () => { speaking = false; if (listening) launch(); };
     speechSynthesis.speak(u);
   }
   $("replay").addEventListener("click", () => speak(lastTranslation));
