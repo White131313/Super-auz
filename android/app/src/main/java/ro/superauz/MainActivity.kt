@@ -11,7 +11,9 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
@@ -34,7 +36,10 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.io.OutputStream
 import java.util.Locale
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
 
@@ -66,6 +71,13 @@ class MainActivity : Activity() {
     @Volatile private var gain = 4f
     @Volatile private var duck = 1f
     private var ampThread: Thread? = null
+
+    // one microphone shared by amplifier and recognizer (Android 13+)
+    @Volatile private var feed: OutputStream? = null
+    private var feedRead: ParcelFileDescriptor? = null
+    private val feedQueue = LinkedBlockingQueue<ByteArray>(64)
+    private var feedThread: Thread? = null
+    private lateinit var statusView: TextView
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -118,6 +130,9 @@ class MainActivity : Activity() {
         micBtn.textSize = 18f
         micBtn.setOnClickListener { if (listening) stopAll() else startAll() }
         root.addView(micBtn)
+        statusView = label("", 13f, "#38e1b0")
+        statusView.setPadding(0, dp(4), 0, dp(4))
+        root.addView(statusView)
 
         replayBtn = Button(this)
         replayBtn.isAllCaps = false
@@ -137,6 +152,10 @@ class MainActivity : Activity() {
         ampSwitch.setTextColor(Color.parseColor("#eef4f3"))
         ampSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
             if (checked) startAmp() else stopAmp()
+            if (listening && !busy) {
+                try { recognizer?.cancel() } catch (e: Exception) {}
+                restartSoon(400)
+            }
         }
         root.addView(ampSwitch)
 
@@ -246,6 +265,8 @@ class MainActivity : Activity() {
         try { recognizer?.cancel() } catch (e: Exception) {}
         tts?.stop()
         duck = 1f
+        closeFeed()
+        statusView.text = ""
         refreshLabels()
     }
 
@@ -268,8 +289,10 @@ class MainActivity : Activity() {
         val r = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
+            override fun onReadyForSpeech(params: Bundle?) {
+                statusView.text = if (feed != null) "● Ascult (microfon comun cu amplificarea)…" else "● Ascult…"
+            }
+            override fun onBeginningOfSpeech() { statusView.text = "● Aud vorbire…" }
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
@@ -297,6 +320,10 @@ class MainActivity : Activity() {
                     msg("Nu am permisiune la microfon.")
                     return
                 }
+                if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT &&
+                    error != SpeechRecognizer.ERROR_CLIENT) {
+                    statusView.text = "Recunoaștere: eroare " + error + " (repornesc)"
+                }
                 if (!listening || busy) return
                 restartSoon(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 900L else 300L)
             }
@@ -307,6 +334,26 @@ class MainActivity : Activity() {
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+        closeFeed()
+        if (ampOn) {
+            if (Build.VERSION.SDK_INT >= 33) {
+                try {
+                    val pipe = ParcelFileDescriptor.createPipe()
+                    feedRead = pipe[0]
+                    feedQueue.clear()
+                    feed = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
+                } catch (e: Exception) {
+                    statusView.text = "Nu pot împărți microfonul: " + (e.message ?: "")
+                    closeFeed()
+                }
+            } else {
+                statusView.text = "Android prea vechi pentru microfon comun (trebuie 13+)."
+            }
+        }
         try {
             r.startListening(i)
         } catch (e: Exception) {
@@ -377,6 +424,34 @@ class MainActivity : Activity() {
         if (listening) restartSoon(200)
     }
 
+    private fun closeFeed() {
+        val f = feed
+        feed = null
+        feedQueue.clear()
+        try { f?.close() } catch (e: Exception) {}
+        try { feedRead?.close() } catch (e: Exception) {}
+        feedRead = null
+    }
+
+    private fun ensureFeedThread() {
+        if (feedThread != null) return
+        val t = Thread {
+            while (true) {
+                val chunk = try { feedQueue.poll(500, TimeUnit.MILLISECONDS) } catch (e: InterruptedException) { break }
+                if (chunk == null) continue
+                val out = feed ?: continue
+                try {
+                    out.write(chunk)
+                } catch (e: Exception) {
+                    if (feed === out) feed = null // recognizer closed its end
+                }
+            }
+        }
+        t.isDaemon = true
+        feedThread = t
+        t.start()
+    }
+
     // ---------------- amplifier ----------------
 
     private fun startAmp() {
@@ -387,6 +462,7 @@ class MainActivity : Activity() {
         }
         if (ampOn) return
         ampOn = true
+        ensureFeedThread()
         val t = Thread { runAmp() }
         ampThread = t
         t.start()
@@ -394,6 +470,7 @@ class MainActivity : Activity() {
 
     private fun stopAmp() {
         ampOn = false
+        closeFeed()
         try { ampThread?.join(800) } catch (e: Exception) {}
         ampThread = null
     }
@@ -440,6 +517,15 @@ class MainActivity : Activity() {
                 val n = rec.read(buf, 0, buf.size)
                 if (n < 0) throw IllegalStateException("eroare citire microfon ($n)")
                 if (n == 0) continue
+                if (feed != null) {
+                    val bytes = ByteArray(n * 2)
+                    for (k in 0 until n) {
+                        val v = buf[k].toInt()
+                        bytes[2 * k] = (v and 0xff).toByte()
+                        bytes[2 * k + 1] = ((v shr 8) and 0xff).toByte()
+                    }
+                    feedQueue.offer(bytes) // drops if recognizer is not reading
+                }
                 val g = gain * duck
                 for (k in 0 until n) {
                     val x = buf[k].toFloat()
