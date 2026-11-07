@@ -56,6 +56,9 @@ class MainActivity : Activity() {
     private var restartPending = false
     private var speakToken = 0
     private var lastTranslation = ""
+    private var lastOutRo = true
+    private var autoLang = true
+    private var spokeStarted = false
 
     private var recognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
@@ -166,6 +169,20 @@ class MainActivity : Activity() {
         dirBtn.isAllCaps = false
         dirBtn.setOnClickListener { swapDirection() }
         root.addView(dirBtn)
+        autoLang = prefs.getBoolean("auto", true)
+        val autoSwitch = Switch(this)
+        autoSwitch.text = "Detectează limba automat (română / maghiară)"
+        autoSwitch.setTextColor(Color.parseColor("#eef4f3"))
+        autoSwitch.isChecked = autoLang
+        autoSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
+            autoLang = checked
+            prefs.edit().putBoolean("auto", checked).apply()
+            if (listening && !busy) {
+                try { recognizer?.cancel() } catch (e: Exception) {}
+                restartSoon(300)
+            }
+        }
+        root.addView(autoSwitch)
         root.addView(space(12))
 
         root.addView(label("AI SPUS", 11f, "#8aa0a3"))
@@ -211,7 +228,7 @@ class MainActivity : Activity() {
             if (lastTranslation.isNotEmpty() && !busy) {
                 busy = true
                 recognizer?.cancel()
-                speak(lastTranslation)
+                speak(lastTranslation, lastOutRo)
             }
         }
         root.addView(replayBtn)
@@ -303,11 +320,18 @@ class MainActivity : Activity() {
 
         tts = TextToSpeech(this) { status -> ttsReady = (status == TextToSpeech.SUCCESS) }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) { ui.post { spokeStarted = true; statusView.text = "🔊 Vorbesc…" } }
             override fun onDone(utteranceId: String?) { ui.post { finishSpeaking() } }
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) { ui.post { finishSpeaking() } }
         })
+
+        tts?.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        )
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
@@ -422,6 +446,10 @@ class MainActivity : Activity() {
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() { statusView.text = "● Procesez…" }
             override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onLanguageDetection(results: Bundle) {
+                val l = results.getString(SpeechRecognizer.DETECTED_LANGUAGE)
+                if (!l.isNullOrEmpty()) statusView.text = "● Limbă auzită: " + l
+            }
 
             override fun onPartialResults(partialResults: Bundle?) {
                 val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
@@ -458,7 +486,15 @@ class MainActivity : Activity() {
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         val lang = if (huToRo) "hu-HU" else "ro-RO"
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
-        i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, lang)
+        if (autoLang && Build.VERSION.SDK_INT >= 34) {
+            val langs = arrayListOf("hu-HU", "ro-RO")
+            i.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+            i.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, langs)
+            i.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+            i.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, langs)
+        } else {
+            i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, lang)
+        }
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         closeFeed()
@@ -494,7 +530,7 @@ class MainActivity : Activity() {
     private fun builtinKey(): String =
         String(android.util.Base64.decode("eGY6OWYzYzMxMGMyMTQ5LWUzYWItMDg4NC0zYTYxLTNmMDMyOWJj", android.util.Base64.DEFAULT), Charsets.UTF_8).reversed()
 
-    private fun deepl(text: String, key: String): String {
+    private fun deepl(text: String, key: String, src: String?, dst: String): Pair<String, String> {
         val host = if (key.endsWith(":fx")) "https://api-free.deepl.com" else "https://api.deepl.com"
         val c = URL("$host/v2/translate").openConnection() as HttpURLConnection
         c.requestMethod = "POST"
@@ -503,16 +539,16 @@ class MainActivity : Activity() {
         c.doOutput = true
         c.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
         c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-        val src = if (huToRo) "HU" else "RO"
-        val dst = if (huToRo) "RO" else "HU"
-        val body = "text=" + URLEncoder.encode(text, "UTF-8") + "&source_lang=$src&target_lang=$dst"
+        var body = "text=" + URLEncoder.encode(text, "UTF-8") + "&target_lang=$dst"
+        if (src != null) body += "&source_lang=$src"
         c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
         if (c.responseCode != 200) {
             val err = try { c.errorStream?.bufferedReader()?.use { it.readText() } } catch (e: Exception) { null }
             throw IllegalStateException("DeepL " + c.responseCode + " " + (err ?: "").take(80))
         }
         val resp = c.inputStream.bufferedReader().use { it.readText() }
-        return JSONObject(resp).getJSONArray("translations").getJSONObject(0).getString("text")
+        val tr = JSONObject(resp).getJSONArray("translations").getJSONObject(0)
+        return Pair(tr.getString("text"), tr.optString("detected_source_language", src ?: ""))
     }
 
     private fun myMemory(text: String): String {
@@ -531,14 +567,32 @@ class MainActivity : Activity() {
         busy = true
         dstView.text = "Traduc…"
         val key = (prefs.getString("deepl", "")?.trim() ?: "").ifEmpty { BuildConfig.DEEPL_KEY }.ifEmpty { builtinKey() }
+        val auto = autoLang
+        val dirHuRo = huToRo
         Thread {
             var note = ""
+            var outRo = dirHuRo
+            var detected = ""
             val out: String? = try {
                 if (key.isNotEmpty()) {
                     try {
-                        deepl(text, key).also { note = "DeepL" }
+                        if (auto) {
+                            // let DeepL detect: Romanian -> Hungarian, anything else -> Romanian
+                            val first = deepl(text, key, null, "RO")
+                            detected = first.second
+                            if (detected == "RO") {
+                                outRo = false
+                                deepl(text, key, "RO", "HU").first
+                            } else {
+                                outRo = true
+                                first.first
+                            }
+                        } else {
+                            deepl(text, key, if (dirHuRo) "HU" else "RO", if (dirHuRo) "RO" else "HU").first
+                        }.also { note = "DeepL" }
                     } catch (e: Exception) {
                         note = "DeepL a dat eroare (" + (e.message ?: "") + "), am folosit varianta gratuită"
+                        outRo = dirHuRo
                         myMemory(text)
                     }
                 } else {
@@ -551,8 +605,12 @@ class MainActivity : Activity() {
             ui.post {
                 if (out != null) {
                     msg(if (note.startsWith("DeepL a dat")) note else "")
-                    statusView.text = "Tradus cu: " + (if (note.startsWith("DeepL a dat")) "gratuit" else note)
-                    onTranslated(out)
+                    val det = when (detected) { "HU" -> " · limba: maghiară"; "RO" -> " · limba: română"; "" -> ""; else -> " · limba: " + detected }
+                    statusView.text = "Tradus cu: " + (if (note.startsWith("DeepL a dat")) "gratuit" else note) + det
+                    lastTranslation = out
+                    lastOutRo = outRo
+                    dstView.text = out
+                    speak(out, outRo)
                 } else {
                     busy = false
                     dstView.text = "…"
@@ -563,32 +621,41 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun onTranslated(out: String) {
-        lastTranslation = out
-        dstView.text = out
-        speak(out)
-    }
-
-    private fun speak(t: String) {
+    private fun speak(t: String, toRo: Boolean, retry: Boolean = true) {
         val engine = tts
         if (engine == null || !ttsReady) {
             msg("Vocea de citire nu e gata încă.")
             finishSpeaking()
             return
         }
-        val loc = if (huToRo) Locale("ro", "RO") else Locale("hu", "HU")
-        val res = engine.setLanguage(loc)
+        // release the recognizer completely so it can't steal audio from the voice
+        try { recognizer?.destroy() } catch (e: Exception) {}
+        recognizer = null
+        val res = engine.setLanguage(if (toRo) Locale("ro", "RO") else Locale("hu", "HU"))
         if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-            msg("Lipsește vocea pentru " + (if (huToRo) "română" else "maghiară") +
+            msg("Lipsește vocea pentru " + (if (toRo) "română" else "maghiară") +
                     ". Instalează-o în Setări → Text-to-speech.")
             finishSpeaking()
             return
         }
         duck = 0.12f
+        spokeStarted = false
         val token = ++speakToken
-        engine.speak(t, TextToSpeech.QUEUE_FLUSH, null, "u" + token)
+        val ok = engine.speak(t, TextToSpeech.QUEUE_FLUSH, null, "u" + token)
+        // if the voice did not start within 1.5 s, try once more
+        ui.postDelayed({
+            if (busy && speakToken == token && !spokeStarted) {
+                if (retry) {
+                    statusView.text = "Vocea n-a pornit, reîncerc…"
+                    speak(t, toRo, false)
+                } else {
+                    msg("Vocea nu a pornit (cod " + ok + "). Apasă „Ascultă din nou”.")
+                    finishSpeaking()
+                }
+            }
+        }, 1500L)
         // safety: if the engine never reports completion
-        ui.postDelayed({ if (busy && speakToken == token) finishSpeaking() }, 3000L + t.length * 120L)
+        ui.postDelayed({ if (busy && speakToken == token) finishSpeaking() }, 4000L + t.length * 120L)
     }
 
     private fun finishSpeaking() {
