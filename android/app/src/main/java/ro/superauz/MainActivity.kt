@@ -457,7 +457,10 @@ class MainActivity : Activity() {
 
             override fun onPartialResults(partialResults: Bundle?) {
                 val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (!t.isNullOrBlank()) srcView.text = t
+                if (!t.isNullOrBlank()) {
+                    srcView.text = t
+                    dstView.setTextColor(Color.parseColor("#5f7377"))
+                }
             }
 
             override fun onResults(results: Bundle?) {
@@ -467,7 +470,7 @@ class MainActivity : Activity() {
                     srcView.text = t
                     translate(t)
                 } else {
-                    restartSoon(250)
+                    restartSoon(100)
                 }
             }
 
@@ -479,9 +482,14 @@ class MainActivity : Activity() {
                     msg("Nu am permisiune la microfon.")
                     return
                 }
-                statusView.text = "Recunoaștere: " + errName(error) + " (cod " + error + "), repornesc"
+                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+                    error == SpeechRecognizer.ERROR_CLIENT) {
+                    statusView.text = "● Ascult…"
+                } else {
+                    statusView.text = "Recunoaștere: " + errName(error) + " (cod " + error + "), repornesc"
+                }
                 if (!listening || busy) return
-                restartSoon(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 900L else 300L)
+                restartSoon(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 700L else 100L)
             }
         })
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -573,14 +581,17 @@ class MainActivity : Activity() {
                 if (key.isNotEmpty()) {
                     try {
                         if (auto) {
-                            // let DeepL detect: Romanian -> Hungarian, anything else -> Romanian
-                            val first = deepl(text, key, null, "RO")
+                            // one call in the selected direction; DeepL detects the source.
+                            // Only if the speaker used the target language, translate the other way.
+                            val tgt = if (dirHuRo) "RO" else "HU"
+                            val first = deepl(text, key, null, tgt)
                             detected = first.second
-                            if (detected == "RO") {
-                                outRo = false
-                                deepl(text, key, "RO", "HU").first
+                            if (detected == tgt) {
+                                val other = if (tgt == "RO") "HU" else "RO"
+                                outRo = other == "RO"
+                                deepl(text, key, tgt, other).first
                             } else {
-                                outRo = true
+                                outRo = tgt == "RO"
                                 first.first
                             }
                         } else {
@@ -612,6 +623,7 @@ class MainActivity : Activity() {
                     lastTranslation = out
                     lastOutRo = outRo
                     dstView.text = out
+                    dstView.setTextColor(Color.parseColor("#5cc182"))
                     speak(out, outRo)
                 } else {
                     busy = false
@@ -663,7 +675,7 @@ class MainActivity : Activity() {
     private fun finishSpeaking() {
         duck = 1f
         busy = false
-        if (listening) restartSoon(200)
+        if (listening) restartSoon(80)
     }
 
     private fun closeFeed() {
