@@ -486,15 +486,7 @@ class MainActivity : Activity() {
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         val lang = if (huToRo) "hu-HU" else "ro-RO"
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
-        if (autoLang && Build.VERSION.SDK_INT >= 34) {
-            val langs = arrayListOf("hu-HU", "ro-RO")
-            i.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
-            i.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, langs)
-            i.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
-            i.putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, langs)
-        } else {
-            i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, lang)
-        }
+        i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, lang)
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         closeFeed()
