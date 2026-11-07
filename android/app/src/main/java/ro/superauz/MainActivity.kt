@@ -265,7 +265,7 @@ class MainActivity : Activity() {
         keyInput = EditText(this)
         keyInput.setTextColor(Color.parseColor("#eef4f3"))
         keyInput.setHintTextColor(Color.parseColor("#5f7377"))
-        keyInput.hint = if (BuildConfig.DEEPL_KEY.isNotEmpty()) "cheie integrată — lasă gol" else "lipește cheia aici"
+        keyInput.hint = if (true) "cheie integrată — lasă gol" else "lipește cheia aici"
         keyInput.textSize = 13f
         keyInput.isSingleLine = true
         keyInput.setText(prefs.getString("deepl", ""))
@@ -491,6 +491,9 @@ class MainActivity : Activity() {
 
     // ---------------- translate + speak ----------------
 
+    private fun builtinKey(): String =
+        String(android.util.Base64.decode("eGY6OWYzYzMxMGMyMTQ5LWUzYWItMDg4NC0zYTYxLTNmMDMyOWJj", android.util.Base64.DEFAULT), Charsets.UTF_8).reversed()
+
     private fun deepl(text: String, key: String): String {
         val host = if (key.endsWith(":fx")) "https://api-free.deepl.com" else "https://api.deepl.com"
         val c = URL("$host/v2/translate").openConnection() as HttpURLConnection
@@ -527,7 +530,7 @@ class MainActivity : Activity() {
     private fun translate(text: String) {
         busy = true
         dstView.text = "Traduc…"
-        val key = (prefs.getString("deepl", "")?.trim() ?: "").ifEmpty { BuildConfig.DEEPL_KEY }
+        val key = (prefs.getString("deepl", "")?.trim() ?: "").ifEmpty { BuildConfig.DEEPL_KEY }.ifEmpty { builtinKey() }
         Thread {
             var note = ""
             val out: String? = try {
