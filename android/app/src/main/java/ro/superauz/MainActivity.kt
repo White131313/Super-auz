@@ -296,7 +296,7 @@ class MainActivity : Activity() {
         saveKey.text = "Salvează cheia"
         saveKey.setOnClickListener {
             prefs.edit().putString("deepl", keyInput.text.toString().trim()).apply()
-            msg(if (keyInput.text.isNullOrBlank()) "Fără cheie: folosesc traducerea gratuită." else "Cheie salvată. Traduc cu DeepL.")
+            msg(if (keyInput.text.isNullOrBlank()) "Folosesc cheia DeepL integrată." else "Cheie salvată. Traduc cu DeepL.")
         }
         root.addView(saveKey)
         root.addView(space(8))
