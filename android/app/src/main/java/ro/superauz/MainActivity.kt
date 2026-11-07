@@ -90,6 +90,7 @@ class MainActivity : Activity() {
     private val feedQueue = LinkedBlockingQueue<ByteArray>(64)
     private var feedThread: Thread? = null
     private lateinit var statusView: TextView
+    private lateinit var engineView: TextView
     private lateinit var levelView: TextView
     private lateinit var serviceView: TextView
     private var sessionToken = 0
@@ -194,6 +195,9 @@ class MainActivity : Activity() {
         dstView = label("…", 20f, "#5cc182")
         dstView.setPadding(0, dp(4), 0, dp(14))
         root.addView(dstView)
+        engineView = label("Traducere: încă nimic", 12f, "#8aa0a3")
+        engineView.setPadding(0, 0, 0, dp(10))
+        root.addView(engineView)
 
         micBtn = Button(this)
         micBtn.isAllCaps = false
@@ -598,7 +602,13 @@ class MainActivity : Activity() {
                 if (out != null) {
                     msg(if (note.startsWith("DeepL a dat")) note else "")
                     val det = when (detected) { "HU" -> " · limba: maghiară"; "RO" -> " · limba: română"; "" -> ""; else -> " · limba: " + detected }
-                    statusView.text = "Tradus cu: " + (if (note.startsWith("DeepL a dat")) "gratuit" else note) + det
+                    if (note == "DeepL") {
+                        engineView.text = "Traducere: DeepL ✓" + det
+                        engineView.setTextColor(Color.parseColor("#5cc182"))
+                    } else {
+                        engineView.text = "Traducere: serviciul gratuit" + det + (if (note.startsWith("DeepL a dat")) " — " + note else "")
+                        engineView.setTextColor(Color.parseColor("#ffb020"))
+                    }
                     lastTranslation = out
                     lastOutRo = outRo
                     dstView.text = out
