@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
@@ -65,6 +67,8 @@ class MainActivity : Activity() {
     private lateinit var micBtn: Button
     private lateinit var replayBtn: Button
     private lateinit var ampSwitch: Switch
+    private lateinit var phoneMicSwitch: Switch
+    @Volatile private var ampAudible = false
     private lateinit var gainBar: SeekBar
     private lateinit var gainLabel: TextView
     private lateinit var msgView: TextView
@@ -217,13 +221,28 @@ class MainActivity : Activity() {
         ampSwitch.text = "Auz amplificat (ce aud în jur)"
         ampSwitch.setTextColor(Color.parseColor("#eef4f3"))
         ampSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
-            if (checked) startAmp() else stopAmp()
+            updateCapture()
             if (listening && !busy) {
                 try { recognizer?.cancel() } catch (e: Exception) {}
                 restartSoon(400)
             }
         }
         root.addView(ampSwitch)
+
+        phoneMicSwitch = Switch(this)
+        phoneMicSwitch.text = "Folosește microfonul telefonului (cu căști conectate)"
+        phoneMicSwitch.setTextColor(Color.parseColor("#eef4f3"))
+        phoneMicSwitch.isChecked = prefs.getBoolean("phonemic", false)
+        phoneMicSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
+            prefs.edit().putBoolean("phonemic", checked).apply()
+            updateCapture()
+            if (listening && !busy) {
+                try { recognizer?.cancel() } catch (e: Exception) {}
+                restartSoon(400)
+            }
+        }
+        root.addView(phoneMicSwitch)
+        root.addView(label("Pornește-l dacă nu recunoaște nimic când ai căștile puse.", 12f, "#8aa0a3"))
 
         gainLabel = label("Amplificare: 4×", 13f, "#8aa0a3")
         root.addView(gainLabel)
@@ -293,6 +312,7 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
+        if (phoneMicSwitch.isChecked && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) updateCapture()
         checkUpdate()
     }
 
@@ -604,10 +624,16 @@ class MainActivity : Activity() {
 
     // ---------------- amplifier ----------------
 
+    private fun updateCapture() {
+        ampAudible = ampSwitch.isChecked
+        if (ampSwitch.isChecked || phoneMicSwitch.isChecked) startAmp() else stopAmp()
+    }
+
     private fun startAmp() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
             ampSwitch.isChecked = false
+            phoneMicSwitch.isChecked = false
             return
         }
         if (ampOn) return
@@ -636,6 +662,12 @@ class MainActivity : Activity() {
             rec = AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, enc,
                 maxOf(minIn, 2048) * 2)
             if (rec.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("microfon indisponibil")
+            if (phoneMicSwitch.isChecked) {
+                val am = getSystemService(AUDIO_SERVICE) as AudioManager
+                val builtin = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                if (builtin != null) rec.setPreferredDevice(builtin)
+            }
             trk = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -676,7 +708,7 @@ class MainActivity : Activity() {
                     }
                     feedQueue.offer(bytes) // drops if recognizer is not reading
                 }
-                val g = gain * duck
+                val g = if (ampAudible) gain * duck else 0f
                 for (k in 0 until n) {
                     val x = buf[k].toFloat()
                     hpY = hpA * (hpY + x - hpX)
@@ -686,13 +718,14 @@ class MainActivity : Activity() {
                     val o = Math.tanh(v.toDouble()).toFloat() * 32767f
                     buf[k] = o.toInt().toShort()
                 }
-                trk.write(buf, 0, n)
+                if (ampAudible) trk.write(buf, 0, n)
             }
         } catch (e: Exception) {
             ampOn = false
             ui.post {
                 msg("Amplificarea s-a oprit: " + (e.message ?: ""))
                 ampSwitch.isChecked = false
+                phoneMicSwitch.isChecked = false
             }
         } finally {
             try { rec?.stop() } catch (e: Exception) {}
