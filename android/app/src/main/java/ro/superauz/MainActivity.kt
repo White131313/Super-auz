@@ -29,6 +29,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.CompoundButton
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -68,6 +69,8 @@ class MainActivity : Activity() {
     private lateinit var gainLabel: TextView
     private lateinit var msgView: TextView
     private lateinit var updateBtn: Button
+    private lateinit var keyInput: EditText
+    private val prefs by lazy { getSharedPreferences("superauz", MODE_PRIVATE) }
 
     @Volatile private var ampOn = false
     @Volatile private var gain = 4f
@@ -98,7 +101,7 @@ class MainActivity : Activity() {
                 else -> 5
             }
         }
-        serviceIdx = 0
+        serviceIdx = prefs.getInt("svc", 0).coerceIn(0, maxOf(services.size - 1, 0))
     }
 
     private fun serviceName(c: ComponentName?): String = when {
@@ -186,6 +189,7 @@ class MainActivity : Activity() {
         serviceView.setOnClickListener {
             if (services.isEmpty()) loadServices()
             if (services.size > 1) serviceIdx = (serviceIdx + 1) % services.size
+            prefs.edit().putInt("svc", serviceIdx).apply()
             if (listening) {
                 busy = false
                 try { recognizer?.cancel() } catch (e: Exception) {}
@@ -238,6 +242,25 @@ class MainActivity : Activity() {
         root.addView(label("Folosește căști. Fără căști apare microfonie.", 12f, "#8aa0a3"))
         root.addView(space(12))
 
+        root.addView(label("Cheie DeepL (opțional, pentru traducere mai bună)", 12f, "#8aa0a3"))
+        keyInput = EditText(this)
+        keyInput.setTextColor(Color.parseColor("#eef4f3"))
+        keyInput.setHintTextColor(Color.parseColor("#5f7377"))
+        keyInput.hint = "lipește cheia aici"
+        keyInput.textSize = 13f
+        keyInput.isSingleLine = true
+        keyInput.setText(prefs.getString("deepl", ""))
+        root.addView(keyInput)
+        val saveKey = Button(this)
+        saveKey.isAllCaps = false
+        saveKey.text = "Salvează cheia"
+        saveKey.setOnClickListener {
+            prefs.edit().putString("deepl", keyInput.text.toString().trim()).apply()
+            msg(if (keyInput.text.isNullOrBlank()) "Fără cheie: folosesc traducerea gratuită." else "Cheie salvată. Traduc cu DeepL.")
+        }
+        root.addView(saveKey)
+        root.addView(space(8))
+
         msgView = label("", 13f, "#ff9aa8")
         root.addView(msgView)
 
@@ -257,7 +280,7 @@ class MainActivity : Activity() {
 
         refreshLabels()
         loadServices()
-        serviceView.text = "Serviciu: " + serviceName(services.getOrNull(0)) + "  (1/" + maxOf(services.size, 1) + ") — apasă aici ca să schimbi"
+        serviceView.text = "Serviciu: " + serviceName(services.getOrNull(serviceIdx)) + "  (" + (serviceIdx + 1) + "/" + maxOf(services.size, 1) + ") — apasă aici ca să schimbi"
 
         tts = TextToSpeech(this) { status -> ttsReady = (status == TextToSpeech.SUCCESS) }
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -448,26 +471,69 @@ class MainActivity : Activity() {
 
     // ---------------- translate + speak ----------------
 
+    private fun deepl(text: String, key: String): String {
+        val host = if (key.endsWith(":fx")) "https://api-free.deepl.com" else "https://api.deepl.com"
+        val c = URL("$host/v2/translate").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 8000
+        c.readTimeout = 8000
+        c.doOutput = true
+        c.setRequestProperty("Authorization", "DeepL-Auth-Key $key")
+        c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        val src = if (huToRo) "HU" else "RO"
+        val dst = if (huToRo) "RO" else "HU"
+        val body = "text=" + URLEncoder.encode(text, "UTF-8") + "&source_lang=$src&target_lang=$dst"
+        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        if (c.responseCode != 200) {
+            val err = try { c.errorStream?.bufferedReader()?.use { it.readText() } } catch (e: Exception) { null }
+            throw IllegalStateException("DeepL " + c.responseCode + " " + (err ?: "").take(80))
+        }
+        val resp = c.inputStream.bufferedReader().use { it.readText() }
+        return JSONObject(resp).getJSONArray("translations").getJSONObject(0).getString("text")
+    }
+
+    private fun myMemory(text: String): String {
+        val pair = if (huToRo) "hu%7Cro" else "ro%7Chu"
+        val url = URL("https://api.mymemory.translated.net/get?q=" +
+                URLEncoder.encode(text, "UTF-8") + "&langpair=" + pair)
+        val c = url.openConnection() as HttpURLConnection
+        c.connectTimeout = 8000
+        c.readTimeout = 8000
+        val body = c.inputStream.bufferedReader().use { it.readText() }
+        val raw = JSONObject(body).getJSONObject("responseData").getString("translatedText")
+        return Html.fromHtml(raw, Html.FROM_HTML_MODE_LEGACY).toString()
+    }
+
     private fun translate(text: String) {
         busy = true
         dstView.text = "Traduc…"
-        val pair = if (huToRo) "hu%7Cro" else "ro%7Chu"
+        val key = prefs.getString("deepl", "")?.trim() ?: ""
         Thread {
-            try {
-                val url = URL("https://api.mymemory.translated.net/get?q=" +
-                        URLEncoder.encode(text, "UTF-8") + "&langpair=" + pair)
-                val c = url.openConnection() as HttpURLConnection
-                c.connectTimeout = 8000
-                c.readTimeout = 8000
-                val body = c.inputStream.bufferedReader().use { it.readText() }
-                val raw = JSONObject(body).getJSONObject("responseData").getString("translatedText")
-                val out = Html.fromHtml(raw, Html.FROM_HTML_MODE_LEGACY).toString()
-                ui.post { onTranslated(out) }
+            var note = ""
+            val out: String? = try {
+                if (key.isNotEmpty()) {
+                    try {
+                        deepl(text, key).also { note = "DeepL" }
+                    } catch (e: Exception) {
+                        note = "DeepL a dat eroare (" + (e.message ?: "") + "), am folosit varianta gratuită"
+                        myMemory(text)
+                    }
+                } else {
+                    myMemory(text).also { note = "traducere gratuită" }
+                }
             } catch (e: Exception) {
-                ui.post {
+                note = "Traducere eșuată: " + (e.message ?: "fără internet?")
+                null
+            }
+            ui.post {
+                if (out != null) {
+                    msg(if (note.startsWith("DeepL a dat")) note else "")
+                    statusView.text = "Tradus cu: " + (if (note.startsWith("DeepL a dat")) "gratuit" else note)
+                    onTranslated(out)
+                } else {
                     busy = false
                     dstView.text = "…"
-                    msg("Traducere eșuată: " + (e.message ?: "fără internet?"))
+                    msg(note)
                     restartSoon(500)
                 }
             }
