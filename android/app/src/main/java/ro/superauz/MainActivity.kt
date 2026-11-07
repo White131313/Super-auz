@@ -265,7 +265,7 @@ class MainActivity : Activity() {
         keyInput = EditText(this)
         keyInput.setTextColor(Color.parseColor("#eef4f3"))
         keyInput.setHintTextColor(Color.parseColor("#5f7377"))
-        keyInput.hint = "lipește cheia aici"
+        keyInput.hint = if (BuildConfig.DEEPL_KEY.isNotEmpty()) "cheie integrată — lasă gol" else "lipește cheia aici"
         keyInput.textSize = 13f
         keyInput.isSingleLine = true
         keyInput.setText(prefs.getString("deepl", ""))
@@ -527,7 +527,7 @@ class MainActivity : Activity() {
     private fun translate(text: String) {
         busy = true
         dstView.text = "Traduc…"
-        val key = prefs.getString("deepl", "")?.trim() ?: ""
+        val key = (prefs.getString("deepl", "")?.trim() ?: "").ifEmpty { BuildConfig.DEEPL_KEY }
         Thread {
             var note = ""
             val out: String? = try {

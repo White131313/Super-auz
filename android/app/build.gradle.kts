@@ -13,6 +13,7 @@ android {
         targetSdk = 34
         versionCode = (project.findProperty("vcode") as String? ?: "1").toInt()
         versionName = "1.0." + versionCode
+        buildConfigField("String", "DEEPL_KEY", "\"" + (System.getenv("DEEPL_KEY") ?: "") + "\"")
     }
 
     // Stable key so every build can update the previous install in place.
